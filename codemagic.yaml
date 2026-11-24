@@ -1,0 +1,72 @@
+workflows:
+  ferreteria-appetize:
+    name: FerreteraCD - Build para Appetize.io
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "FerreteraCD.xcodeproj"
+        XCODE_TARGET: "FerreteraCD"
+        APP_NAME: "FerreteraCD"
+      # Opcional: crea en Codemagic un grupo de variables llamado "appetize"
+      # con la variable APPETIZE_API_TOKEN para subir la app automáticamente.
+      # groups:
+      #   - appetize
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: "*"
+          include: true
+    scripts:
+      - name: Información del proyecto
+        script: |
+          xcodebuild -version
+          xcodebuild -list -project "$XCODE_PROJECT"
+
+      - name: Compilar para simulador iOS (sin firma)
+        script: |
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -target "$XCODE_TARGET" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            SYMROOT="$CM_BUILD_DIR/build"
+
+      - name: Empaquetar .app en .zip para Appetize
+        script: |
+          APP_PATH="$CM_BUILD_DIR/build/Release-iphonesimulator/$APP_NAME.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "No se encontró $APP_PATH"
+            find "$CM_BUILD_DIR/build" -name "*.app"
+            exit 1
+          fi
+          mkdir -p "$CM_BUILD_DIR/artifacts"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$CM_BUILD_DIR/artifacts/$APP_NAME-simulator.zip" "$APP_NAME.app"
+          ls -lh "$CM_BUILD_DIR/artifacts"
+
+      - name: Subir a Appetize.io (opcional)
+        script: |
+          if [ -z "$APPETIZE_API_TOKEN" ]; then
+            echo "APPETIZE_API_TOKEN no definido; se omite la subida."
+            echo "Descarga el .zip de los artefactos y súbelo manualmente en https://appetize.io/upload"
+            exit 0
+          fi
+          curl --fail -sS https://api.appetize.io/v1/apps \
+            -H "X-API-KEY: $APPETIZE_API_TOKEN" \
+            -F "file=@$CM_BUILD_DIR/artifacts/$APP_NAME-simulator.zip" \
+            -F "platform=ios" \
+            -o "$CM_BUILD_DIR/artifacts/appetize_response.json"
+          cat "$CM_BUILD_DIR/artifacts/appetize_response.json"
+
+    artifacts:
+      - artifacts/*.zip
+      - artifacts/*.json
+      - /tmp/xcodebuild_logs/*.log
